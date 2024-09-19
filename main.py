@@ -8,14 +8,14 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
 # Load the persisted ChromaDB vector store
-embedding = OllamaEmbeddings(model="nomic-embed-text", show_progress=True)
-persist_directory = "./db"
+# embedding = OllamaEmbeddings(model="nomic-embed-text", show_progress=True)
+# persist_directory = "./db"
 
-vector_database = Chroma(
-    collection_name="local-rag",
-    persist_directory=persist_directory,
-    embedding_function=embedding
-)
+# vector_database = Chroma(
+#     collection_name="local-rag",
+#     persist_directory=persist_directory,
+#     embedding_function=embedding
+# )
 
 QUERY_PROMPT = PromptTemplate(
     input_variables=["context","question"],
@@ -40,7 +40,7 @@ def post_process_answer(answer):
     processed_ans =  answer.split("Answer:")[-1].strip()
     return processed_ans if processed_ans else "No relevant info found in the context..."
 
-def generate_ans(question, llm):
+def generate_ans(question, llm, vector_database):
     # Dynamic retriever that uses the passed LLM
     retriever = MultiQueryRetriever.from_llm(
         vector_database.as_retriever(search_kwargs={"k": 3}),

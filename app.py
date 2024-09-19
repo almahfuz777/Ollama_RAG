@@ -1,6 +1,9 @@
 import streamlit as st
 from main import generate_ans
 from langchain_community.llms import Ollama
+from langchain_community.embeddings import OllamaEmbeddings
+from langchain.embeddings import SentenceTransformerEmbeddings
+from langchain_chroma.vectorstores import Chroma
 import logging
 
 # Streamlit UI
@@ -15,6 +18,13 @@ with st.sidebar:
         index=0  # Default selection
     )
 
+    # Dropdown to select the embedding model/database
+    selected_embedding_model = st.selectbox(
+        "Select Embedding Model",
+        options=["nomic-embed-text", "all-MiniLM-L6-v2"],
+        index=0  # Default selection
+    )
+    
     st.title("Chat Sessions") # Sidebar title
 
     # Button to clear the session (chat history and memory)
@@ -26,6 +36,20 @@ if selected_model == "llama3.1":
     llm = Ollama(model="llama3.1")
 elif selected_model == "mistral":
     llm = Ollama(model="mistral")
+    
+# Load the database with selected embedding model
+if selected_embedding_model == "nomic-embed-text":
+    embedding = OllamaEmbeddings(model="nomic-embed-text", show_progress=True)
+    persist_directory = "./db/db_nomic"
+elif selected_embedding_model == "all-MiniLM-L6-v2":
+    embedding = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
+    persist_directory = "./db/db_minilm"
+
+vector_database = Chroma(
+    collection_name="local-rag",
+    persist_directory=persist_directory,
+    embedding_function=embedding
+)
 
 # Initialize session state for chat history
 if "chat_history" not in st.session_state:
@@ -37,7 +61,7 @@ if st.button("Submit"):
     if user_ques:
         try:
             with st.spinner("Fetching AI response..."):
-                final_ans = generate_ans(user_ques, llm)
+                final_ans = generate_ans(user_ques, llm, vector_database)
                 # st.write(f"Answer: {final_ans}")
                 st.session_state.chat_history.append({"user": user_ques, "answer": final_ans})
                 st.session_state.user_input = ""    # Clear input after submission
