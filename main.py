@@ -1,5 +1,8 @@
 import streamlit as st
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_ollama import OllamaLLM
+from langchain_ollama import OllamaEmbeddings
+# from langchain_community.embeddings import OllamaEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma.vectorstores import Chroma
 from langchain.prompts import PromptTemplate
 from langchain.retrievers.multi_query import MultiQueryRetriever
@@ -7,21 +10,29 @@ from langchain.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
-# Load the persisted ChromaDB vector store
-# embedding = OllamaEmbeddings(model="nomic-embed-text", show_progress=True)
-# persist_directory = "./db"
-
-# vector_database = Chroma(
-#     collection_name="local-rag",
-#     persist_directory=persist_directory,
-#     embedding_function=embedding
-# )
+@st.cache_data
+def load_db(embedding_model):
+    if embedding_model == "nomic-embed-text":
+        embedding = OllamaEmbeddings(model="nomic-embed-text")
+        persist_directory = "./db/db_nomic"
+    elif embedding_model == "all-MiniLM-L6-v2":
+        embedding = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        persist_directory = "./db/db_minilm"
+    
+    # Load the database with selected embedding model
+    vector_database = Chroma(
+        collection_name="local-rag",
+        persist_directory=persist_directory,
+        embedding_function=embedding
+    )
+    return vector_database
 
 QUERY_PROMPT = PromptTemplate(
-    input_variables=["context","question"],
+    input_variables=["question"],
     template="""
     You are an AI language model specialized in physics. Your task is to reformulate the following question into five different versions to retrieve the most relevant physics documents.
-    Original question: {question}""",
+    Original question: {question}
+    """,
 )
 
 # RAG prompt
@@ -40,13 +51,17 @@ def post_process_answer(answer):
     processed_ans =  answer.split("Answer:")[-1].strip()
     return processed_ans if processed_ans else "No relevant info found in the context..."
 
-def generate_ans(question, llm, vector_database):
+def generate_ans(question, llm, embedding_model):
+    vector_database = load_db(embedding_model)
+    llm = OllamaLLM(model=llm)
+
     # Dynamic retriever that uses the passed LLM
     retriever = MultiQueryRetriever.from_llm(
         vector_database.as_retriever(search_kwargs={"k": 3}),
         llm,
         prompt = QUERY_PROMPT
     )
+
     chain = (
         {"context": retriever, "question": RunnablePassthrough()}
         | prompt

@@ -1,82 +1,101 @@
 import streamlit as st
 from main import generate_ans
-from langchain_community.llms import Ollama
-from langchain_community.embeddings import OllamaEmbeddings
-from langchain.embeddings import SentenceTransformerEmbeddings
-from langchain_chroma.vectorstores import Chroma
 import logging
 
 # Streamlit UI
-st.title("Q/A bot Physics")
+st.set_page_config(
+    page_icon='🔭',
+    page_title="Physics ChatBot",
+    layout="wide",
+    # initial_sidebar_state="collapsed",
+)
+st.subheader("🤖 Q/A bot Physics")
 
 # Sidebar for model selection and sessions
 with st.sidebar:
+    st.subheader("Chat Sessions", divider="gray") # Sidebar title
+
     # dropdown menu to select a model
-    selected_model = st.selectbox(
+    llm = st.selectbox(
         "Select LLM",
-        options=["llama3.1", "mistral"],
+        options=["mistral","llama3.1", "llama3.2",],
         index=0  # Default selection
     )
 
     # Dropdown to select the embedding model/database
-    selected_embedding_model = st.selectbox(
+    embedding_model = st.selectbox(
         "Select Embedding Model",
-        options=["nomic-embed-text", "all-MiniLM-L6-v2"],
+        options=["all-MiniLM-L6-v2", "nomic-embed-text", ],
         index=0  # Default selection
     )
     
-    st.title("Chat Sessions") # Sidebar title
-
     # Button to clear the session (chat history and memory)
     if st.button("Clear Session"):
         st.session_state.clear()
-
-# Setting up the LLM based on the selected model
-if selected_model == "llama3.1":
-    llm = Ollama(model="llama3.1")
-elif selected_model == "mistral":
-    llm = Ollama(model="mistral")
+        st.write("Session cleared.")
     
-# Load the database with selected embedding model
-if selected_embedding_model == "nomic-embed-text":
-    embedding = OllamaEmbeddings(model="nomic-embed-text", show_progress=True)
-    persist_directory = "./db/db_nomic"
-elif selected_embedding_model == "all-MiniLM-L6-v2":
-    embedding = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
-    persist_directory = "./db/db_minilm"
+    # Blank Space to push the link to the bottom
+    st.container(height=280, border=False)
+        
+    # Link to feedback form
+    st.sidebar.markdown("[Share Feedback](https://forms.gle/qenvLzoynpdYuyit8)", unsafe_allow_html=True)
 
-vector_database = Chroma(
-    collection_name="local-rag",
-    persist_directory=persist_directory,
-    embedding_function=embedding
-)
-
-# Initialize session state for chat history
+# Initialize session state for chat history 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-user_ques = st.text_input("Throw your problems.")
+# Initialize user_input
+if "user_input" not in st.session_state:  
+    st.session_state.user_input = ""
 
-if st.button("Submit"):
+# Display the chat history
+message_container = st.container(height=380, border=True)
+with message_container:
+    for message in st.session_state["chat_history"]:
+        if "role" in message and "content" in message:
+            avatar = "🤖" if message["role"]== "assistant" else "🤔"
+            st.chat_message(message["role"], avatar=avatar).markdown(message["content"])  
+
+# Input field for query
+user_ques = st.text_input(
+    label="Ask Bot", 
+    value=st.session_state["user_input"], 
+    placeholder="Throw your problems..."
+)
+
+# Submit button clicked
+if st.button("Submit"):    
     if user_ques:
         try:
-            with st.spinner("Fetching AI response..."):
-                final_ans = generate_ans(user_ques, llm, vector_database)
-                # st.write(f"Answer: {final_ans}")
-                st.session_state.chat_history.append({"user": user_ques, "answer": final_ans})
-                st.session_state.user_input = ""    # Clear input after submission
+            # Append user ques to chat_history
+            st.session_state.chat_history.append({
+                "role": "user", 
+                "content": user_ques
+            })
+            # Display the user question in the chat message container
+            message_container.chat_message("user", avatar="🤔").markdown(user_ques)
+
+            # Generate and display the assistant's response
+            with message_container.chat_message("assistant", avatar="🤖"):
+                with st.spinner("Fetching AI response..."):
+                    final_ans = generate_ans(user_ques, llm, embedding_model)
+
+                    # Display assistant response
+                    st.markdown(final_ans)
+
+                    # Append AI's response to chat history
+                    st.session_state.chat_history.append({
+                        "role": "assistant",
+                        "content": final_ans
+                    })
+                    
+                    st.session_state.user_input = ""    # Clear input after submission
 
         except Exception as e:
             st.error(f"An error occured: {str(e)}")
     else:
         st.write("Please enter a question!")
 
-# Display chat history
-if st.session_state.chat_history:
-    for chat in st.session_state.chat_history:
-        st.write(f"**You:** {chat['user']}")
-        st.write(f"**Bot:** {chat['answer']}")
-        st.markdown("---")
 
 # logging after each response generation
 logging.basicConfig(level=logging.INFO)
