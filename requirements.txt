@@ -1,0 +1,10 @@
+langchain_community
+pdfplumber
+pandas
+langchain_ollama
+langchain_huggingface
+langchain_chroma
+pypdf
+streamlit
+
+torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118

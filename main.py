@@ -4,11 +4,14 @@ from langchain_ollama import OllamaEmbeddings
 # from langchain_community.embeddings import OllamaEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma.vectorstores import Chroma
-from langchain.prompts import PromptTemplate
+from langchain.prompts import PromptTemplate, MessagesPlaceholder
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnablePassthrough, RunnableMap
 from langchain_core.output_parsers import StrOutputParser
+from langchain.chains import create_history_aware_retriever, create_retrieval_chain
+from langchain_core.messages import HumanMessage, AIMessage
+
 
 def load_db(embedding_model):
     if embedding_model == "nomic-embed-text":
@@ -26,17 +29,28 @@ def load_db(embedding_model):
     )
     return vector_database
 
-QUERY_PROMPT = PromptTemplate(
-    input_variables=["question"],
-    template="""
-    You are an AI language model specialized in physics. Your task is to reformulate the following question into five different versions to retrieve the most relevant physics documents.
-    Original question: {question}
-    """,
+# Query Prompt
+contextualize_q_system_prompt = """Given a chat history and the latest user question \
+which might reference context in the chat history, formulate a standalone question \
+which can be understood without the chat history. Do NOT answer the question, \
+just reformulate it if needed and otherwise return it as is.
+"""
+contextualize_q_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", contextualize_q_system_prompt),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}"),
+    ]
 )
 
 # RAG prompt
-template = """You are a helpful assistant trained to answer physics questions based on the provided context.
-Use only the context below to answer the following question as clearly as possible:
+template = """You are a friendly assistant trained to answer physics questions for school level student (9th/10th grade). 
+Use the conversation history to understand the context to answer the question clearly.
+
+Conversation History:
+{conversation_history}
+
+You can use the following context if it's relevant to the question (ignore if it's not relevant):
 {context}
 Question: 
 {question}
@@ -44,29 +58,64 @@ Question:
 
 prompt = ChatPromptTemplate.from_template(template)
 
-def post_process_answer(answer):
-    # Ensure the answer is focused on the physics topic
-    # Optionally trim any irrelevant parts or hallucinated information
-    processed_ans =  answer.split("Answer:")[-1].strip()
-    return processed_ans if processed_ans else "No relevant info found in the context..."
+def format_chat_to_str(chat_history):
+    """Format the chat history for display in prompts."""
+    return "\n".join([f"{entry['role']}: {entry['content']}" for entry in chat_history])
 
-def generate_ans(question, llm, embedding_model):
-    vector_database = load_db(embedding_model)
+def format_chat_history_for_langchain(chat_history):
+    """Format chat history into a list of BaseMessage objects."""
+    formatted_history = []
+    for entry in chat_history:
+        if isinstance(entry, dict):
+            role = entry.get("role")
+            content = entry.get("content")
+            
+            if role == "user":
+                formatted_history.append(HumanMessage(content=content))
+            elif role == "assistant":
+                formatted_history.append(AIMessage(content=content))
+    return formatted_history
+
+def generate_ans(question, llm, embedding_model, chat_history):
     llm = OllamaLLM(model=llm)
+    vector_database = load_db(embedding_model)
+    recent_chat = chat_history[-5:]
 
-    # Dynamic retriever that uses the passed LLM
-    retriever = MultiQueryRetriever.from_llm(
-        vector_database.as_retriever(search_kwargs={"k": 3}),
-        llm,
-        prompt = QUERY_PROMPT
+    # Create a retriever
+    retriever = vector_database.as_retriever(search_kwargs={"k": 5})
+
+    # Create the history-aware retriever
+    history_aware_retriever = create_history_aware_retriever(
+        llm, 
+        retriever, 
+        contextualize_q_prompt
     )
+    
+    # Retrieve relevant documents
+    retrieved_docs = history_aware_retriever.invoke({
+        "input": question, 
+        "chat_history": format_chat_history_for_langchain(recent_chat)
+    })
+    # print("retrieved_docs:" ,retrieved_docs)
 
     chain = (
-        {"context": retriever, "question": RunnablePassthrough()}
+        RunnableMap({
+            "context": history_aware_retriever,
+            "question": RunnablePassthrough(),              # This will be the input question
+            "conversation_history": RunnablePassthrough()   # This will pass formatted chat history
+        })
         | prompt
         | llm
         | StrOutputParser()
     )
-    answer = chain.invoke(question)
-    final_ans = post_process_answer(answer)
-    return final_ans
+
+    ans = chain.invoke({
+        "question": question,
+        "conversation_history": format_chat_to_str(recent_chat),  # Pass formatted chat history to the prompt
+        "input": question, 
+        "chat_history": format_chat_history_for_langchain(recent_chat)  # This is the correctly formatted chat history for the retriever
+    })
+    
+    # ans = ""
+    reformulated_question="Question: reformulated_question"
+    return ans, retrieved_docs
