@@ -2,48 +2,29 @@ from main import generate_ans
 from langchain_ollama import OllamaLLM
 from sentence_transformers import SentenceTransformer, util
 from bert_score import score
-# from deepeval.metrics import AnswerRelevancyMetric, FaithfulnessMetric, ContextualPrecisionMetric, ContextualRelevancyMetric, HallucinationMetric
-# from deepeval.test_case import LLMTestCase
 import pandas as pd
+import json
 
 # set test parameters (llm and database)
 llm = "mistral"
 embedding_model = "all-MiniLM-L6-v2"
 
 # Load test cases
-def load_testcases(file_path = "test_results/testcases.txt"):
-    testcases = []
-    case_data = {}  # Temporarily store each case's data
+def load_testcases(file_path = "test_results/testcases.json"):
     try:
         with open(file_path, 'r', encoding='utf-8') as file:
-            for line in file:
-                line = line.strip()
-                
-                # Start of a new test case
-                if(line.startswith("query:")):
-                    # Save the previous test case if it exists
-                    if case_data: testcases.append(case_data)
-                    
-                    # Start a new test case dictionary    
-                    case_data = {"query": line.split("query:", 1)[1].strip()}
-                
-                elif line.startswith("expected_response:"):
-                    case_data["expected_response"] = line.split("expected_response:", 1)[1].strip()
-
-                elif line.startswith("isCorrect :"):
-                    case_data["isCorrect"] = line.split("isCorrect :", 1)[1].strip().lower() == "true"
-
-            if case_data: testcases.append(case_data)
+            testcases = json.load(file)
         
-        # Add index to each test case
+        # Add index to each test case if not already present
         for index, case in enumerate(testcases, start=1):
-            case["index"] = index
-                
+            if "index" not in case:
+                case["index"] = index
+
     except FileNotFoundError:
         print(f"The file {file_path} was not found.")
         exit()
-    except UnicodeDecodeError:
-        print(f"Could not decode the file {file_path}. Please check the file encoding.")
+    except json.JSONDecodeError:
+        print(f"Could not decode the JSON file {file_path}. Please check the file format.")
         exit()
 
     return testcases
@@ -88,14 +69,6 @@ def llm_validation(expected, actual):
         print(f"Error in LLM validation: {e}")
         return False
 
-# # DeepEval Metrics
-# deepeval_metrics = {
-#     "AnswerRelevancyMetric": AnswerRelevancyMetric(threshold=0.7, model="mistral", include_reason=True),
-#     "FaithfulnessMetric": FaithfulnessMetric(threshold=0.7, model="mistral", include_reason=True),
-#     "ContextualRelevancyMetric": ContextualRelevancyMetric(threshold=0.7, model="mistral", include_reason=True),
-#     # "HallucinationMetric": HallucinationMetric(threshold=0.7, model="mistral", include_reason=True),
-# }
-
 
 # Calculate TP, TN, FP, FN, and metrics for each method
 def calculate_metrics(testcases, results, method):
@@ -129,6 +102,8 @@ def update_metrics(results, method, isCorrect, passed):
         else:
             results[f"{method}_TN"] += 1
     return results
+
+testresult_df = pd.DataFrame(columns=["Index", "Chapter", "Question_Type", "Cosine_Pass", "Bert_Pass", "LLM_Pass"])
 
 # Run test cases and evaluate
 def run_tests():
@@ -168,6 +143,8 @@ def run_tests():
         expected_response  = case["expected_response"]
         isCorrect  = case["isCorrect"]
         index  = case["index"]
+        chapter = case.get("chapter", "Unknown")
+        question_type = case.get("questionType", "General")
         
         print(f"\nRunning testcase {i}:\nQuery: {query}\nExpected Response: {expected_response}\n")
 
@@ -191,6 +168,16 @@ def run_tests():
         print(f"\nExpected Response Status: {isCorrect}\nCosine Output\t\t: {cosine_pass}\nBERT Output\t\t: {bert_pass}\nLLM Output\t\t: {llm_pass}\n")
         
         update_log_file(log_file, case, actual_response, cosine_pass, cosine_score, bert_pass, bert_score, llm_pass)
+
+        # Update testresult_df with detailed results
+        testresult_df.loc[len(testresult_df)] = {
+            "Index": index,
+            "Chapter": chapter,
+            "Question_Type": question_type,
+            "Cosine_Pass": cosine_pass,
+            "Bert_Pass": bert_pass,
+            "LLM_Pass": llm_pass
+        }
         
         # Update the DataFrame for each method
         for method in ["cosine_similarity", "bert_score", "llm_validation"]:
@@ -210,33 +197,7 @@ def run_tests():
             results_df.at[metric_name, "F1_Score"] = metrics["f1_score"]
 
         results_df.to_csv("test_results/test_summary.csv", index=True)
-        
-        # # DeepEval
-        # deepeval_results_df = pd.DataFrame(columns=["Case_no", "Metric", "Score","Reason",])
-        # test_case_deepeval = LLMTestCase(
-        #     input=query,
-        #     actual_output=actual_response,
-        #     expected_output=expected_response,
-        #     retrieval_context= [doc.page_content for doc in retrieved_docs],
-        # )
-        # for metric_name, metric in deepeval_metrics.items():
-        #     metric.measure(test_case_deepeval)
-        #     print("DeepEval Metrics:")
-        #     print(f"{metric_name} Score: {metric.score:.4f}")
-        #     print(f"{metric_name} Reason: {metric.reason}")
-    
-        #     # Append the result for the current metric
-        #     deepeval_results_df = pd.concat([
-        #         deepeval_results_df,
-        #         pd.DataFrame({
-        #             "Case_no": [i],
-        #             "Metric": [metric_name],
-        #             "Score": [round(metric.score, 4)],
-        #             "Reason": [metric.reason]
-        #         })
-        #     ], ignore_index=True)
-        #     deepeval_results_df.to_csv("test_results/deep_eval_summary.csv", index=False)
-
+        testresult_df.to_csv("test_results/detailed_test_results.csv", index=False)
     
     # Print final results df
     print("\nResults DataFrame:")
